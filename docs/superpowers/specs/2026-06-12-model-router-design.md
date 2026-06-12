@@ -97,7 +97,7 @@ model-router/
 ├── config/
 │   └── model-config.json     ← 用户可编辑的路由规则（安装后可自定义）
 │
-├── pricing/
+├── data/
 │   └── pricing.json          ← 内置定价数据（随包发布，用户不改，不可手动编辑）
 │
 ├── src/
@@ -109,7 +109,7 @@ model-router/
 │   │   └── tracker.ts        ← 成本追踪器（per-session JSONL）
 │   │
 │   ├── pricing/
-│   │   └── sync.ts           ← 从官方定价页自动拉取更新
+│   │   └── sync.ts           ← 从官方定价页自动拉取更新（代码目录，与 data/pricing.json 数据分离）
 │   │
 │   ├── adapters/
 │   │   └── pi/

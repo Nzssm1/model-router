@@ -50,9 +50,14 @@ before_agent_start
 │  │  按 priority 降序 → Top-1      │     │
 │  └───────────┬────────────────────┘     │
 │              │ 有候选？                  │
-│              │ NO → 退回快速路径结果     │
-│              ▼                           │
-│        最终路由结果                      │
+│              │ YES ──────────────────┐   │
+│              │ NO ─────────────────┐ │   │
+│              ▼                     ▼ ▼   │
+│        语义匹配结果          快速路径结果  │
+│              │              (默认规则)    │
+│              └──────────┬────────┘        │
+│                         ▼                 │
+│                   最终路由结果             │
 └─────────────────────────────────────────┘
 ```
 
@@ -74,17 +79,15 @@ before_agent_start
 ### 新增类型
 
 ```typescript
-export interface MatchCondition {
-  keywords?: string[];
-  notKeywords?: string[];
-  toolsUsed?: string[];
-  notToolsUsed?: string[];
-  consecutive?: number;
-  inputLength?: { min?: number; max?: number };
-  or?: MatchCondition[];
-  and?: MatchCondition[];
-  not?: MatchCondition;
-  description?: string;  // 新增：自然语言描述，用于语义匹配
+// MatchCondition 不变，不新增字段
+// description 放在 RuleDefinition 层级（MatchCondition 通过 or/and/not 嵌套，子条件不应有 description）
+
+export interface RuleDefinition {
+  id: string;
+  priority: number;
+  when: MatchCondition;
+  then: { model: string; thinking?: string };
+  description?: string;  // 新增：自然语言描述，用于语义匹配（规则级别属性）
 }
 ```
 
@@ -98,7 +101,7 @@ export interface MatchCondition {
 | `simple-qa` | 50 | 回答概念性问题、解释技术术语或原理、总结文档内容、对比两个事物的异同、提供事实性信息，不需要生成或修改代码的问答。 |
 | `default` | 0 | 其他未被上述规则覆盖的通用任务，包括闲聊、工具使用确认、简单文件操作反馈、会话管理、或意图不明确的简短指令。 |
 
-**向后兼容**：未写 `description` 的规则自动回退到用 `keywords` 拼接进行语义匹配（降级行为）。用户自定义规则可选填 `description`。
+**向后兼容**：未写 `description` 的规则不参与语义匹配（匹配流程中直接跳过），仅通过快速路径（关键词/工具）路由。用户自定义规则可选填 `description` 来启用语义匹配。
 
 ## 语义引擎
 
@@ -187,7 +190,7 @@ export async function matchSemantic(
 ```
 matchSemantic(input, rules, threshold)
   ↓
-1. 过滤：只取有 description 的规则（无 description 的规则跳过）
+1. 过滤：只取 `RuleDefinition.description` 非空的规则（无 description 则跳过，不参与语义匹配）
   ↓
 2. 编码用户输入 → inputVec
   ↓
@@ -216,6 +219,18 @@ const shouldUseSemantic = semanticResult != null
 当前 `arbitrate()` 函数新增可选参数 `semanticResult`：
 
 ```typescript
+// ArbitrateInput 新增字段：
+//   semanticThreshold?: number  — 语义匹配阈值（由调用方从 config 传入）
+
+export interface ArbitrateInput {
+  text: string;
+  recentTools: string[];
+  consecutiveToolCalls: number;
+  rules: RuleDefinition[];
+  classifierState: ClassifierState;
+  semanticThreshold?: number;  // 新增
+}
+
 export function arbitrate(
   input: ArbitrateInput,
   semanticResult?: SemanticMatchResult
@@ -231,7 +246,7 @@ export function arbitrate(
       thinking: semanticResult.thinking,
       semanticMatch: {
         similarity: semanticResult.similarity,
-        threshold: input.semanticThreshold,
+        threshold: input.semanticThreshold ?? 0.55,
         allScores: semanticResult.allScores,
       },
     };
@@ -265,6 +280,7 @@ export function arbitrate(
 ```json
 {
   "routing": {
+    "semanticRouting": true,
     "semanticThreshold": 0.55,
     "rules": [...]
   }
@@ -300,6 +316,14 @@ export function arbitrate(
 - 仅影响当前 Pi 会话
 - 下次启动 Pi 时自动恢复为 config 中的设置
 - 如需永久关闭：设置 `"semanticRouting": false` 于 config
+
+### 与 `/model` 命令的交互
+
+`/model`（手动切换模型）的优先级高于语义路由：
+- 用户执行 `/model deepseek-v4-flash` → ClassifierState.manualOverrideRemaining = 3 → 3 轮内跳过所有自动路由决策
+- 语义路由在此期间**仍运行并记录匹配结果到日志**（`semanticMatch` 字段正常写入 CostRecord），但不覆盖用户的显式模型选择
+- `/model auto` 或 3 轮锁定到期后，语义路由恢复自动覆盖能力
+- 手动覆盖期间，`/router status` 输出中标注 "⚠ 手动模型覆盖中（剩余 2 轮）"
 
 ## 失败处理
 
@@ -358,14 +382,15 @@ export interface CostRecord {
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `config/model-config.json` | 修改 | 5 条规则各加 `description`；新增 `semanticThreshold` |
-| `src/core/types.ts` | 修改 | `MatchCondition` 加 `description?`；新增 `SemanticMatch` 接口；`ArbitrationResult` 加 `semanticMatch?`；`CostRecord` 加 `semanticMatch?` |
+| `config/model-config.json` | 修改 | 5 条规则各加 `description`；新增 `semanticRouting` 和 `semanticThreshold` 配置项 |
+| `src/core/types.ts` | 修改 | `RuleDefinition` 加 `description?`；`ArbitrateInput` 加 `semanticThreshold?`；新增 `SemanticMatch` 接口；`ArbitrationResult` 加 `semanticMatch?`；`CostRecord` 加 `semanticMatch?` |
 | `src/core/router.ts` | 修改 | 导出 `decide()` 的匹配详情（规则 ID + 是否默认规则），供语义路径判断触发条件 |
 | `src/core/arbitrator.ts` | 修改 | `arbitrate()` 接受可选 `SemanticMatchResult` 参数，语义路径覆盖默认规则 |
 | `src/semantic/engine.ts` | **新增** | ONNX embedding 引擎封装 |
 | `src/semantic/cache.ts` | **新增** | 规则 embedding 预计算与内存缓存 |
 | `src/semantic/matcher.ts` | **新增** | 语义匹配逻辑 |
-| `src/adapters/pi/index.ts` | 修改 | 启动时初始化语义引擎并预下载模型；`before_agent_start` 集成语义路径；`/router` 命令注册 |
+| `package.json` | 修改 | 新增依赖 `@xenova/transformers` |
+| `src/adapters/pi/index.ts` | 修改 | 启动时初始化语义引擎并预下载模型；`before_agent_start` 集成语义路径（含阈值解析）；`/router` 命令注册；处理 `/model` 手动覆盖与语义路由的优先级 |
 | `src/adapters/pi/commands.ts` | 修改 | 新增 `/router` 命令；`/cost -vv` 支持 |
 | `src/core/tracker.ts` | 修改 | `CostRecord` 新增 `semanticMatch` 字段 |
 | `src/utils/report-formatter.ts` | 修改 | `formatVerboseReport` 支持 `-vv` 排名输出 |
@@ -404,7 +429,7 @@ export interface CostRecord {
 - 快速路径延迟：与现有实现一致（<1ms），零退化
 - 语义路径延迟：5-10ms（首次调用含模型已预加载）
 - 包体积增长：约 120MB（模型文件），仅在使用语义路由时下载
-- 内存增长：模型加载后约 180MB 常驻
+- 内存增长：模型加载后约 180-250MB 常驻（以实际 Benchmark 为准；含 ONNX Runtime WASM、tokenizer 及运行时张量）
 - 任一组件崩溃不影响 Pi Agent 主流程（延续现有错误处理原则）
 - 向后兼容：不写 `description` 的规则行为与 v0.1 完全一致
 
