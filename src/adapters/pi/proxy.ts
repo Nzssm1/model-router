@@ -1,7 +1,8 @@
 import http from 'node:http';
+import https from 'node:https';
+import { Transform } from 'node:stream';
 
 const PROXY_PORT = 11451;
-const DEEPSEEK_BASE = 'https://api.deepseek.com/v1';
 
 // Shared mutable state — Router writes, proxy reads
 export let targetModel: string = 'deepseek-v4-flash';
@@ -20,11 +21,9 @@ let server: http.Server | null = null;
 
 /**
  * Proxy an OpenAI-compatible streaming request to DeepSeek.
- * Injects targetModel into the request body.
- * Strips thinking params for Flash (non-reasoning model).
+ * Uses node:https directly (not fetch) to avoid undici's strict header validation.
  */
 function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): void {
-  // Only accept /v1/chat/completions
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   if (url.pathname !== '/v1/chat/completions') {
     res.writeHead(404);
@@ -39,7 +38,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
       const model = targetModel;
 
-      // Flash: strip thinking/reasoning params, force non-thinking mode
+      // Flash: strip thinking params
       if (model === 'deepseek-v4-flash') {
         delete body.reasoning_effort;
         body.thinking = { type: 'disabled' };
@@ -51,7 +50,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         body.thinking = { type: 'enabled' };
       }
 
-      // Override model in the request
+      // Override model
       body.model = model;
 
       const apiKey = getApiKey();
@@ -61,44 +60,56 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
         return;
       }
 
-      const upstreamUrl = `${DEEPSEEK_BASE}/chat/completions`;
-      const response = await fetch(upstreamUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
+      const postData = JSON.stringify(body);
+
+      // Use node:https instead of fetch to avoid undici header validation issues
+      const upstreamReq = https.request(
+        'https://api.deepseek.com/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Length': Buffer.byteLength(postData).toString(),
+          },
         },
-        body: JSON.stringify(body),
+        (upstreamRes) => {
+          // Forward status and headers
+          const statusCode = upstreamRes.statusCode || 500;
+          const statusMsg = upstreamRes.statusMessage || '';
+          // Only forward safe headers (skip transfer-encoding, connection, etc.)
+          const safeHeaders: Record<string, string | string[]> = {};
+          for (let i = 0; i < upstreamRes.rawHeaders.length; i += 2) {
+            const key = upstreamRes.rawHeaders[i].toLowerCase();
+            const val = upstreamRes.rawHeaders[i + 1];
+            if (['transfer-encoding', 'connection', 'keep-alive', 'content-length'].includes(key)) continue;
+            if (safeHeaders[key]) {
+              if (Array.isArray(safeHeaders[key])) {
+                (safeHeaders[key] as string[]).push(val);
+              } else {
+                safeHeaders[key] = [safeHeaders[key] as string, val];
+              }
+            } else {
+              safeHeaders[key] = val;
+            }
+          }
+          res.writeHead(statusCode, statusMsg, safeHeaders);
+
+          // Pipe upstream response to client
+          upstreamRes.pipe(res);
+        },
+      );
+
+      upstreamReq.on('error', (err) => {
+        console.error('[ModelRouter Proxy] Request error:', err);
+        if (!res.headersSent) {
+          res.writeHead(502);
+        }
+        res.end(JSON.stringify({ error: err.message }));
       });
 
-      // Forward response headers
-      const status = response.status;
-      for (const [key, value] of response.headers) {
-        if (key.toLowerCase() !== 'transfer-encoding') {
-          res.setHeader(key, value);
-        }
-      }
-      res.writeHead(status);
-
-      // Pipe streaming response or forward body
-      if (response.body) {
-        const reader = response.body.getReader();
-        const pump = async () => {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
-            res.write(value);
-          }
-          res.end();
-        };
-        pump().catch(err => {
-          console.error('[ModelRouter Proxy] Stream error:', err);
-          res.end();
-        });
-      } else {
-        const text = await response.text();
-        res.end(text);
-      }
+      upstreamReq.write(postData);
+      upstreamReq.end();
     } catch (err) {
       console.error('[ModelRouter Proxy] Error:', err);
       if (!res.headersSent) {
@@ -115,7 +126,6 @@ export function startProxy(): void {
   server.listen(PROXY_PORT, '127.0.0.1', () => {
     console.log(`[ModelRouter] Proxy listening on 127.0.0.1:${PROXY_PORT}`);
   });
-  // Allow process to exit even if proxy is listening
   server.unref();
 }
 
