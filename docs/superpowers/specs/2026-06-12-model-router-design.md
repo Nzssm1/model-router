@@ -188,6 +188,9 @@ interface ClassifierState {
 
   // 升级锁：upgrade 生效后 N 轮内不再降级
   upgradeLockRemaining: number;
+
+  // 用户手动覆盖锁：/model 手动选择模型后 N 轮内不自动切换
+  manualOverrideRemaining: number;
 }
 ```
 
@@ -443,8 +446,9 @@ cacheWrite费用 = cacheWriteTokens × cacheWrite单价 / 1,000,000
 | 命令 | 功能 | 可用范围 |
 |------|------|---------|
 | `/cost` | 输出当前会话的成本报告 | 任何时候 |
-| `/cost --verbose` | 输出带路由明细的成本报告（每条记录含规则 ID 和仲裁原因） | 任何时候 |
-| `/cost --all` | 输出所有会话的成本报告 | 任何时候 |
+| `/cost --verbose` （或 `/cost -v`） | 输出带路由明细的成本报告（每条记录含规则 ID 和仲裁原因） | 任何时候 |
+| `/cost --all` （或 `/cost -a`） | 输出所有会话的成本报告 | 任何时候 |
+| `/cost -vv` | 语义路由生效时额外展示各候选规则的相似度排名（仅限 Semantic Router 扩展） | 任何时候 |
 | `/model` | 查看/手动切换模型（Pi 内置，Model Router 尊重手动选择，临时覆盖自动路由） | 任何时候 |
 
 `/cost` 输出示例：
@@ -466,7 +470,7 @@ cacheWrite费用 = cacheWriteTokens × cacheWrite单价 / 1,000,000
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-`/cost --verbose` 额外输出每条路由记录：
+`/cost --verbose`（或 `/cost -v`）额外输出每条路由记录。Semantic Router 扩展还支持 `/cost -vv` 以展示语义候选规则的相似度排名：
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

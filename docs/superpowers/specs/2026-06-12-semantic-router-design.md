@@ -65,7 +65,7 @@ before_agent_start
 
 语义路径仅在以下条件**同时满足**时触发：
 1. 快速路径输出的 `ruleId === 'default'`（即只有兜底规则命中）
-2. 语义引擎已就绪且 `sessionSemanticDisabled !== true`
+2. 语义引擎已就绪（`SemanticEngine.ready === true`，即模型文件已下载且 ONNX 加载成功）且 `sessionSemanticDisabled !== true`
 3. 规则列表中至少有一条规则配置了 `description` 字段
 
 除此之外的所有情况——包括快速路径命中了任何非默认规则——都不触发语义路径，直接输出快速路径结果。
@@ -206,7 +206,7 @@ matchSemantic(input, rules, threshold)
 7. 返回 Top-1 + 全量分数列表（用于 -vv 展示）
 ```
 
-## 决策仲裁修改
+# 决策仲裁修改
 
 语义路径仅在快速路径输出默认规则时介入。触发条件精确定义为：
 
@@ -216,21 +216,43 @@ const shouldUseSemantic = semanticResult != null
   && !sessionSemanticDisabled;
 ```
 
-当前 `arbitrate()` 函数新增可选参数 `semanticResult`：
+**重要：语义结果仍需经过 Classifier 的安全升级检查。** 如果 Classifier 判定 upgrade，即使语义匹配认为当前是简单任务，也应当升级到更强模型。
+
+`ArbitrateInput` 新增 `semanticThreshold` 字段：
 
 ```typescript
-// ArbitrateInput 新增字段：
-//   semanticThreshold?: number  — 语义匹配阈值（由调用方从 config 传入）
-
 export interface ArbitrateInput {
   text: string;
   recentTools: string[];
   consecutiveToolCalls: number;
   rules: RuleDefinition[];
   classifierState: ClassifierState;
-  semanticThreshold?: number;  // 新增
+  semanticThreshold?: number;  // 语义匹配阈值（由调用方从 config 传入）
 }
+```
 
+`ArbitrationResult` 新增 `semanticMatch` 字段：
+
+```typescript
+export interface ArbitrationResult {
+  model: string;
+  ruleId: string;
+  reason: string;
+  thinking?: string;
+  semanticMatch?: {              // 新增（仅在语义路径触发时填充）
+    similarity: number;          // 匹配规则的余弦相似度
+    threshold: number;           // 当前阈值
+    allScores: Array<{           // 全量候选规则的相似度排名
+      ruleId: string;
+      similarity: number;
+    }>;
+  };
+}
+```
+
+更新后的 `arbitrate()` 函数：
+
+```typescript
 export function arbitrate(
   input: ArbitrateInput,
   semanticResult?: SemanticMatchResult
@@ -239,10 +261,30 @@ export function arbitrate(
 
   // 语义路径：仅在快速路径命中默认规则时尝试覆盖
   if (semanticResult && routerResult?.ruleId === 'default') {
+    let finalModel = semanticResult.model;
+    let reason = `语义匹配 ${semanticResult.ruleId} (相似度 ${semanticResult.similarity.toFixed(2)})`;
+
+    // ⚠ Classifier upgrade 始终覆盖语义结果（安全优先）
+    if (input.classifierState.lastVerdict === 'upgrade') {
+      const upgraded = getUpgradeTarget(finalModel);
+      if (upgraded) {
+        finalModel = upgraded;
+        reason += ` + Classifier upgrade (覆盖语义结果)`;
+      }
+    }
+
+    // ⚠ Classifier downgrade 仅在语义匹配到弱规则时允许
+    if (input.classifierState.lastVerdict === 'downgrade') {
+      const needsStrong = isStrongRule(semanticResult.ruleId, input.rules);
+      if (needsStrong) {
+        reason += ` (downgrade 被语义规则 ${semanticResult.ruleId} 否决)`;
+      }
+    }
+
     return {
-      model: semanticResult.model,
+      model: finalModel,
       ruleId: semanticResult.ruleId,
-      reason: `语义匹配 ${semanticResult.ruleId} (相似度 ${semanticResult.similarity.toFixed(2)})`,
+      reason,
       thinking: semanticResult.thinking,
       semanticMatch: {
         similarity: semanticResult.similarity,
@@ -252,9 +294,11 @@ export function arbitrate(
     };
   }
 
-  // 原有的 Classifier 仲裁逻辑不变
+  // 原有的 Classifier 仲裁逻辑（含 upgrade/downgrade 判断）
+  // 与语义路径互斥：此处只有非默认规则的 Router 结果
   // ...
 }
+```
 ```
 
 ## 阈值设计
@@ -309,6 +353,20 @@ export function arbitrate(
  匹配方式: 语义 (相似度 0.74)
  阈值: 0.55
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+手动覆盖中的状态示例：
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 🧠 Model Router - 路由状态
+ ⚠ 手动模型覆盖中（剩余 2 轮）
+ 语义引擎: 已开启 (模型: MiniLM-L12-multilingual)
+ 当前模型: deepseek-v4-flash（用户手动选择）
+ 命中规则: —（跳过）
+ 匹配方式: —（手动覆盖，3 轮后恢复自动）
+ 阈值: 0.55
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
 ```
 
 ### `/router off` 作用域
