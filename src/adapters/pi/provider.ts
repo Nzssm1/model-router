@@ -1,36 +1,28 @@
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 /**
- * Register DeepSeek V4 Flash and V4 Pro as a custom provider.
- * Uses OpenAI-compatible API format.
- *
- * Requires DEEPSEEK_API_KEY environment variable.
+ * Register 'model-router' as a single virtual provider.
+ * Pi always calls this one 'model', the local proxy at 11451
+ * forwards to Flash or Pro based on Router's decision.
  */
-export function registerDeepSeekProvider(pi: ExtensionAPI): void {
-  pi.registerProvider('deepseek', {
-    name: 'DeepSeek',
-    baseUrl: 'https://api.deepseek.com/v1',
-    apiKey: '$DEEPSEEK_API_KEY',
+export function registerModelRouterProvider(pi: ExtensionAPI): void {
+  pi.registerProvider('model-router', {
+    name: 'Model Router',
+    baseUrl: 'http://localhost:11451/v1',
+    apiKey: 'noop',
     api: 'openai-completions',
     models: [
       {
-        id: 'deepseek-v4-flash',
-        name: 'DeepSeek V4 Flash',
-        reasoning: false,
+        id: 'model-router',
+        name: 'Model Router (Auto)',
+        reasoning: true,             // supports both thinking/non-thinking
         input: ['text'],
-        cost: { input: 1.0, output: 2.0, cacheRead: 0.02, cacheWrite: 0.02 },
-        contextWindow: 1_000_000,
-        maxTokens: 393_216,
-        compat: {
-          thinkingFormat: 'deepseek',
+        cost: {
+          input: 0,                  // cost tracked by our own pricing
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
         },
-      },
-      {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        reasoning: true,
-        input: ['text'],
-        cost: { input: 3.0, output: 6.0, cacheRead: 0.025, cacheWrite: 0.025 },
         contextWindow: 1_000_000,
         maxTokens: 393_216,
         compat: {

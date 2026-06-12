@@ -2,13 +2,14 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { registerDeepSeekProvider } from './provider';
+import { registerModelRouterProvider } from './provider';
 import { createInitialState, analyze, onModelSwitch } from '../../core/classifier';
 import { arbitrate } from '../../core/arbitrator';
 import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
 import type { RouterConfig, ClassifierState } from '../../core/types';
 import { registerCommands, setSessionId } from './commands';
+import { startProxy, stopProxy, setTargetModel } from './proxy';
 
 let config: RouterConfig | null = null;
 let classifierState: ClassifierState | null = null;
@@ -45,22 +46,20 @@ function loadConfig(): RouterConfig {
 }
 
 export default function (pi: ExtensionAPI) {
-  // Register DeepSeek provider
-  registerDeepSeekProvider(pi);
+  // Register model-router virtual provider + start proxy
+  registerModelRouterProvider(pi);
+  startProxy();
 
-  // Load pricing data (compatible path resolution for Node <20.11)
+  // Load pricing data
   const __filename = fileURLToPath(import.meta.url);
   const __dirname = dirname(__filename);
   const pricingPath = join(__dirname, '..', '..', '..', 'pricing', 'pricing.json');
   loadPricing(pricingPath);
 
-  // Load routing config
-  const cfg = loadConfig();
-
   // Register commands
   registerCommands(pi);
 
-  // ─── before_agent_start: analyze input and set model ───
+  // ─── before_agent_start: analyze input and set target model ───
   pi.on('before_agent_start', async (event, ctx) => {
     const text = event.prompt;
     if (!text) return;
@@ -96,33 +95,35 @@ export default function (pi: ExtensionAPI) {
       classifierState,
     });
 
-    // Switch model if needed (via /model command queued as followUp)
+    // Set target model for the proxy — this is the actual model switch!
     if (result.model !== currentModel) {
       const oldModel = currentModel;
       currentModel = result.model;
       const upgradedToStronger = result.model === 'deepseek-v4-pro' && oldModel === 'deepseek-v4-flash';
       classifierState = onModelSwitch(classifierState, result.model, result.ruleId, upgradedToStronger);
-      // Queue /model switch command — executes after current turn completes
-      pi.sendUserMessage(`/model deepseek/${result.model}`, { deliverAs: 'followUp' });
     }
+    setTargetModel(currentModel, result.thinking);
   });
 
   // ─── turn_end: update classifier state and record costs ───
   pi.on('turn_end', async (event, ctx) => {
     if (!classifierState) return;
 
+    // @ts-expect-error Pi SDK types: message can be assistant message with usage
     const message = event.message as any;
     const usage = message?.usage;
     const hadError = message?.stopReason === 'error';
-    const hadRetry = false;
 
     const c = loadConfig();
 
+    // Record cost for this turn
     if (usage) {
+      // Use the actual model from API response (proxy returns flash or pro)
+      const actualModel = message?.model || currentModel;
       const escalated = classifierState.lastVerdict === 'upgrade';
       recordCost({
         sessionId,
-        model: currentModel,
+        model: actualModel,
         ruleId: classifierState.currentRuleId,
         reason: `Turn ${event.turnIndex}`,
         tokens: {
@@ -138,21 +139,20 @@ export default function (pi: ExtensionAPI) {
       });
     }
 
+    // Analyze turn result for next round
     const turnTools = event.toolResults?.map(r => r.toolName) || [];
     const { newState, verdict } = analyze(classifierState, {
       turnIndex: event.turnIndex,
       toolsCalled: turnTools,
       modelUsed: currentModel,
       hadError,
-      hadRetry,
+      hadRetry: false,
     }, c.routing.escalation);
     classifierState = newState;
   });
 
-  // ─── message_end: capture per-message usage ───
-  pi.on('message_end', async (event, _ctx) => {
-    if ((event.message as any).usage && (event.message as any).model) {
-      // Usage data captured in turn_end already
-    }
+  // ─── session_shutdown: clean up proxy ───
+  pi.on('session_shutdown', async () => {
+    stopProxy();
   });
 }
