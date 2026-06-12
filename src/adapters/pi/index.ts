@@ -96,29 +96,14 @@ export default function (pi: ExtensionAPI) {
       classifierState,
     });
 
-    // Switch model if needed
+    // Switch model if needed (via /model command queued as followUp)
     if (result.model !== currentModel) {
-      try {
-        // @ts-expect-error Pi SDK types lag behind runtime API
-        await ctx.model.switchModel(result.model);
-        const oldModel = currentModel;
-        currentModel = result.model;
-        const upgradedToStronger = result.model === 'deepseek-v4-pro' && oldModel === 'deepseek-v4-flash';
-        classifierState = onModelSwitch(classifierState, result.model, result.ruleId, upgradedToStronger);
-      } catch (e) {
-        console.warn(`[ModelRouter] Failed to switch to ${result.model}:`, e);
-        recordCost({
-          sessionId,
-          model: currentModel,
-          ruleId: result.ruleId,
-          reason: `${result.reason} (切换失败，保持 ${currentModel})`,
-          tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          duration: 0,
-          success: false,
-          escalated: false,
-          error: String(e),
-        });
-      }
+      const oldModel = currentModel;
+      currentModel = result.model;
+      const upgradedToStronger = result.model === 'deepseek-v4-pro' && oldModel === 'deepseek-v4-flash';
+      classifierState = onModelSwitch(classifierState, result.model, result.ruleId, upgradedToStronger);
+      // Queue /model switch command — executes after current turn completes
+      pi.sendUserMessage(`/model deepseek/${result.model}`, { deliverAs: 'followUp' });
     }
   });
 
