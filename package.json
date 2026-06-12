@@ -6,15 +6,18 @@
   "type": "module",
   "main": "./src/adapters/pi/index.ts",
   "pi": {
-    "extensions": ["./src/adapters/pi/index.ts"]
+    "extensions": [
+      "./src/adapters/pi/index.ts"
+    ]
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "latest",
+    "@huggingface/transformers": "^3.8.1",
     "typebox": "latest"
   },
   "devDependencies": {
-    "typescript": "^5.0.0",
     "@types/node": "^20.0.0",
+    "typescript": "~5.9.0",
     "vitest": "^3.0.0"
   }
 }

@@ -18,6 +18,8 @@ export interface RouterConfig {
   routing: {
     rules: RuleDefinition[];
     escalation: EscalationConfig;
+    semanticRouting?: boolean;
+    semanticThreshold?: number;
   };
 }
 
@@ -29,6 +31,7 @@ export interface RuleDefinition {
     model: string;
     thinking?: string;
   };
+  description?: string;  // natural language description for semantic routing
 }
 
 export interface EscalationConfig {
@@ -87,6 +90,11 @@ export interface CostRecord {
   success: boolean;
   escalated: boolean;
   error?: string;
+  semanticMatch?: {
+    similarity: number;
+    threshold: number;
+    allScores: Array<{ ruleId: string; similarity: number }>;
+  };
 }
 
 // ─── Classifier types ───
@@ -107,6 +115,28 @@ export interface ClassifierState {
   }>;
   lastVerdict: Verdict;
   upgradeLockRemaining: number;
+  manualOverrideRemaining: number;
+}
+
+// ─── Semantic Router types ───
+
+export interface SemanticMatchResult {
+  ruleId: string;
+  model: string;
+  thinking?: string;
+  similarity: number;
+  allScores: Array<{ ruleId: string; similarity: number }>;
+}
+
+// ─── Arbitrate Input ───
+
+export interface ArbitrateInput {
+  text: string;
+  recentTools: string[];
+  consecutiveToolCalls: number;
+  rules: RuleDefinition[];
+  classifierState: ClassifierState;
+  semanticThreshold?: number;
 }
 
 // ─── Arbitrator types ───
@@ -122,4 +152,9 @@ export interface ArbitrationResult {
   ruleId: string;
   reason: string;
   thinking?: string;
+  semanticMatch?: {
+    similarity: number;
+    threshold: number;
+    allScores: Array<{ ruleId: string; similarity: number }>;
+  };
 }

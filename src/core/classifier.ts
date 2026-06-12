@@ -11,6 +11,7 @@ export function createInitialState(sessionId: string, initialModel: string, init
     recentTools: [],
     lastVerdict: 'keep',
     upgradeLockRemaining: 0,
+    manualOverrideRemaining: 0,
   };
 }
 
