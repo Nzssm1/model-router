@@ -5,7 +5,7 @@ import { createInitialState, analyze, onModelSwitch } from '../../core/classifie
 import { arbitrate } from '../../core/arbitrator';
 import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
-import type { RouterConfig, ClassifierState } from '../../core/types';
+import type { RouterConfig, ClassifierState, ArbitrationResult } from '../../core/types';
 import { registerCommands, setSessionId, setRetryInit } from './commands';
 import { getEngine, ensureEngineLoaded } from '../../semantic/engine';
 import { SemanticCache } from '../../semantic/cache';
@@ -27,6 +27,7 @@ let currentModel: string = 'deepseek-v4-flash';
 const semanticEngine = getEngine();
 let semanticCache: SemanticCache | null = null;
 let engineInitAttempted = false;
+let lastArbitrationResult: ArbitrationResult | null = null;
 
 function loadConfig(): RouterConfig {
   if (config) return config;
@@ -181,6 +182,9 @@ export default function (pi: ExtensionAPI) {
       console.log(`[ModelRouter] 🧠 Semantic: "${semanticResult.ruleId}" (${semanticResult.similarity.toFixed(2)})`);
     }
 
+    // Store for turn_end to access semanticMatch
+    lastArbitrationResult = result;
+
     // Switch model using the official pi.setModel() API
     if (result.model !== currentModel) {
       const targetModel = ctx.modelRegistry.find('deepseek', result.model);
@@ -230,6 +234,7 @@ export default function (pi: ExtensionAPI) {
         success: !hadError,
         escalated,
         error: hadError ? message.errorMessage : undefined,
+        semanticMatch: lastArbitrationResult?.semanticMatch,
       });
     }
 

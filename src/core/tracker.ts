@@ -1,6 +1,6 @@
 import { appendFileSync, mkdirSync, existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import type { CostRecord, CostBreakdown, TokenUsage } from './types';
+import type { CostRecord, CostBreakdown, TokenUsage, ArbitrationResult } from './types';
 import { calculateCost } from '../utils/pricing';
 
 const DEFAULT_COST_DIR = join(process.env.HOME || process.env.USERPROFILE || '~', '.model-router', 'costs');
@@ -34,6 +34,7 @@ export function recordCost(params: {
   success: boolean;
   escalated: boolean;
   error?: string;
+  semanticMatch?: ArbitrationResult['semanticMatch'];
 }): CostRecord {
   turnCounter++;
   const cost = calculateCost(params.model, params.tokens);
@@ -49,6 +50,7 @@ export function recordCost(params: {
     success: params.success,
     escalated: params.escalated,
     error: params.error,
+    semanticMatch: params.semanticMatch,
   };
 
   try {

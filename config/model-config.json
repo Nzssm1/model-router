@@ -1,5 +1,7 @@
 {
   "routing": {
+    "semanticRouting": false,
+    "semanticThreshold": 0.55,
     "rules": [
       {
         "id": "complex-task",
@@ -8,7 +10,8 @@
           "keywords": ["重构", "架构", "设计", "架构分析", "refactor", "architecture"],
           "notKeywords": ["小重构", "简单调整"]
         },
-        "then": { "model": "deepseek-v4-pro", "thinking": "high" }
+        "then": { "model": "deepseek-v4-pro", "thinking": "high" },
+        "description": "涉及跨模块或全系统范围的代码重构、软件架构设计与评估、技术方案选型与权衡分析、需要深度因果关系推理的复杂问题排查，或对现有系统做结构性改造的设计讨论。"
       },
       {
         "id": "code-generation",
@@ -16,7 +19,8 @@
         "when": {
           "keywords": ["实现", "implement", "写一个", "create", "add feature", "修改", "改"]
         },
-        "then": { "model": "deepseek-v4-pro", "thinking": "medium" }
+        "then": { "model": "deepseek-v4-pro", "thinking": "medium" },
+        "description": "编写新功能、实现业务逻辑、创建组件或模块、修改现有代码行为、修复缺陷、添加功能特性、优化代码性能，需要生成大量代码的任务。"
       },
       {
         "id": "file-reading",
@@ -24,7 +28,8 @@
         "when": {
           "toolsUsed": ["read", "ls", "grep", "find"]
         },
-        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" },
+        "description": "浏览项目文件、阅读源代码、搜索特定代码片段、查找定义或引用、了解项目结构、阅读文档或注释，以信息收集和阅读理解为主的任务。"
       },
       {
         "id": "simple-qa",
@@ -32,13 +37,15 @@
         "when": {
           "keywords": ["解释", "explain", "什么是", "what is", "总结", "summarize"]
         },
-        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" },
+        "description": "回答概念性问题、解释技术术语或原理、总结文档内容、对比两个事物的异同、提供事实性信息，不需要生成或修改代码的问答。"
       },
       {
         "id": "default",
         "priority": 0,
         "when": {},
-        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" },
+        "description": "其他未被上述规则覆盖的通用任务，包括闲聊、工具使用确认、简单文件操作反馈、会话管理、或意图不明确的简短指令。"
       }
     ],
     "escalation": {
