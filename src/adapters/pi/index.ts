@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { createInitialState, analyze, onModelSwitch } from '../../core/classifier';
 import { arbitrate } from '../../core/arbitrator';
+import { decide } from '../../core/router';
 import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
 import type { RouterConfig, ClassifierState, ArbitrationResult } from '../../core/types';
@@ -27,6 +28,7 @@ let currentModel: string = 'deepseek-v4-flash';
 const semanticEngine = getEngine();
 let semanticCache: SemanticCache | null = null;
 let engineInitAttempted = false;
+let engineInitPromise: Promise<void> | null = null;
 let lastArbitrationResult: ArbitrationResult | null = null;
 
 function loadConfig(): RouterConfig {
@@ -68,20 +70,31 @@ function resolveSessionId(ctx: any): string {
 
 async function initSemanticEngine(): Promise<void> {
   if (semanticEngine.ready) return;
+  // If already in progress, return the existing promise so callers can await it
+  if (engineInitPromise) return engineInitPromise;
+
   engineInitAttempted = true;
-  try {
-    await ensureEngineLoaded();
-    semanticCache = new SemanticCache(semanticEngine);
-    const cfg = loadConfig();
-    await semanticCache.compute(cfg.routing.rules);
-    console.log('[ModelRouter] 🧠 Semantic engine ready');
-  } catch (e) {
-    console.warn('[ModelRouter] ⚠️ Semantic engine init failed:', e);
-  }
+  engineInitPromise = (async () => {
+    try {
+      await ensureEngineLoaded();
+      semanticCache = new SemanticCache(semanticEngine);
+      const cfg = loadConfig();
+      await semanticCache.compute(cfg.routing.rules);
+      console.log('[ModelRouter] 🧠 Semantic engine ready');
+    } catch (e) {
+      console.warn('[ModelRouter] ⚠️ Semantic engine init failed:', e);
+      throw e;
+    } finally {
+      engineInitPromise = null;
+    }
+  })();
+
+  return engineInitPromise;
 }
 
 async function retryInit(): Promise<void> {
   engineInitAttempted = false;
+  engineInitPromise = null;
   await initSemanticEngine();
 }
 
@@ -94,6 +107,12 @@ export default function (pi: ExtensionAPI) {
 
   // Wire retryInit so /router on can trigger engine re-initialization
   setRetryInit(retryInit);
+
+  // Eager init: preload semantic engine on startup if routing is enabled
+  const cfg = loadConfig();
+  if (cfg.routing.semanticRouting === true) {
+    initSemanticEngine(); // non-blocking, logs progress
+  }
 
   // ─── before_agent_start: analyze input and switch model ───
   pi.on('before_agent_start', async (event, ctx) => {
@@ -134,7 +153,7 @@ export default function (pi: ExtensionAPI) {
     const hasManualOverride = sessionState.manualOverrideRemaining > 0;
 
     // Fast path
-    const routerResult = (await import('../../core/router')).decide(
+    const routerResult = decide(
       cfg.routing.rules,
       { text, recentTools, consecutiveToolCalls },
     );
@@ -148,8 +167,8 @@ export default function (pi: ExtensionAPI) {
       && !isSessionDisabled(sessionId)
       && !hasManualOverride
     ) {
-      // Lazy-init engine
-      if (!engineInitAttempted) {
+      // Lazy-init engine (or await in-progress eager init)
+      if (!engineInitAttempted || engineInitPromise) {
         await initSemanticEngine();
       }
 

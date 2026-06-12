@@ -1,6 +1,6 @@
 {
   "routing": {
-    "semanticRouting": false,
+    "semanticRouting": true,
     "semanticThreshold": 0.55,
     "rules": [
       {

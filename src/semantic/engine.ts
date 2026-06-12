@@ -28,8 +28,8 @@ export class DefaultSemanticEngine implements SemanticEngine {
     env.allowRemoteModels = true;
 
     // Load the feature extraction pipeline (quantized ONNX)
-    // @ts-expect-error - quantized option exists at runtime but not in v3 types
-    this.pipe = await pipeline('feature-extraction', MODEL_NAME, { quantized: true });
+    // @ts-expect-error - quantized/dtype options exist at runtime but not in v3 types
+    this.pipe = await pipeline('feature-extraction', MODEL_NAME, { quantized: true, dtype: 'fp32' });
     this.ready = true;
   }
 

@@ -71,4 +71,27 @@ describe('full semantic routing flow', () => {
     expect(result.model).toBe('deepseek-v4-pro');
     expect(result.reason).toContain('upgrade');
   });
+
+  it('Classifier downgrade changes model when semantic rule is weak', async () => {
+    const state = { ...createInitialState('s1', 'pro', 'complex'), lastVerdict: 'downgrade' as const };
+    const result = arbitrate(
+      { text: '读这个文件', recentTools: ['read'], consecutiveToolCalls: 3, rules, classifierState: state, semanticThreshold: 0.55 },
+      // semantic matches reading (priority 60, not strong), model suggests Pro
+      { ruleId: 'reading', model: 'deepseek-v4-pro', similarity: 0.62, allScores: [] },
+    );
+    // reading rule (priority 60 < 80) is weak → downgrade takes effect, Pro→Flash
+    expect(result.model).toBe('deepseek-v4-flash');
+    expect(result.reason).toContain('downgrade');
+  });
+
+  it('Classifier downgrade vetoed when semantic rule is strong', async () => {
+    const state = { ...createInitialState('s1', 'pro', 'complex'), lastVerdict: 'downgrade' as const };
+    const result = arbitrate(
+      { text: '重构架构', recentTools: ['read'], consecutiveToolCalls: 3, rules, classifierState: state, semanticThreshold: 0.55 },
+      { ruleId: 'complex', model: 'deepseek-v4-pro', similarity: 0.74, allScores: [{ ruleId: 'complex', similarity: 0.74 }] },
+    );
+    // complex rule (priority 100 ≥ 80) is strong → downgrade vetoed
+    expect(result.model).toBe('deepseek-v4-pro');
+    expect(result.reason).toContain('否决');
+  });
 });

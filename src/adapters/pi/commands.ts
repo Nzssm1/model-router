@@ -1,3 +1,5 @@
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ExtensionAPI, ExtensionCommandContext } from '@earendil-works/pi-coding-agent';
 import { generateReport, generateAggregatedReport } from '../../core/tracker';
 import { formatCostReport, formatVerboseReport } from '../../utils/report-formatter';
@@ -82,9 +84,12 @@ export function registerCommands(pi: ExtensionAPI): void {
       // status (default)
       const ss = getSessionState(currentSessionId);
       const eng = getEngine();
+
+      // Trigger lazy init if engine not ready yet
+      if (!eng.ready && !isSessionDisabled(currentSessionId) && retryInitFn) {
+        retryInitFn().catch(() => {}); // non-blocking
+      }
       // Load config for threshold display
-      const { readFileSync, existsSync } = await import('node:fs');
-      const { join } = await import('node:path');
       const configPaths = [
         join(process.cwd(), 'config', 'model-config.json'),
         join(process.env.HOME || '~', '.model-router', 'config.json'),
