@@ -9,7 +9,7 @@ import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
 import type { RouterConfig, ClassifierState } from '../../core/types';
 import { registerCommands, setSessionId } from './commands';
-import { startProxy, stopProxy, setTargetModel } from './proxy';
+import { startProxy, stopProxy, setTargetModel, setApiKey } from './proxy';
 
 let config: RouterConfig | null = null;
 let classifierState: ClassifierState | null = null;
@@ -49,6 +49,7 @@ export default function (pi: ExtensionAPI) {
   // Register model-router virtual provider + start proxy
   registerModelRouterProvider(pi);
   startProxy();
+  setApiKey(process.env.DEEPSEEK_API_KEY || '');
 
   // Load pricing data
   const __filename = fileURLToPath(import.meta.url);

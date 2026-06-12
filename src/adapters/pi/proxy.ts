@@ -7,14 +7,19 @@ const PROXY_PORT = 11451;
 // Shared mutable state — Router writes, proxy reads
 export let targetModel: string = 'deepseek-v4-flash';
 let currentThinking: string | undefined;
+let apiKeyValue: string = '';
 
 export function setTargetModel(model: string, thinking?: string): void {
   targetModel = model;
   currentThinking = thinking;
 }
 
+export function setApiKey(key: string): void {
+  apiKeyValue = key;
+}
+
 function getApiKey(): string {
-  return process.env.DEEPSEEK_API_KEY || '';
+  return apiKeyValue || (process.env.DEEPSEEK_API_KEY || '').trim();
 }
 
 let server: http.Server | null = null;
