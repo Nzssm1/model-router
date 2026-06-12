@@ -54,7 +54,10 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       body.model = model;
 
       const apiKey = getApiKey();
-      if (!apiKey) {
+      if (!apiKey || apiKey.trim() === '') {
+        console.error('[ModelRouter] DEEPSEEK_API_KEY 环境变量为空！');
+        console.error('请在启动 Pi 前设置: export DEEPSEEK_API_KEY="sk-478264fc0ad44f8eab4f2521584d64ea"');
+        console.error('或添加到 ~/.zshrc: echo \'export DEEPSEEK_API_KEY="sk-478264fc0ad44f8eab4f2521584d64ea"\' >> ~/.zshrc');
         res.writeHead(500);
         res.end('DEEPSEEK_API_KEY not set');
         return;
