@@ -1,0 +1,31 @@
+{
+  "models": {
+    "deepseek-v4-flash": {
+      "provider": "deepseek",
+      "currency": "CNY",
+      "pricing": {
+        "input": 1.0,
+        "output": 2.0,
+        "cacheRead": 0.02,
+        "cacheWrite": 0.02
+      },
+      "contextWindow": 1_000_000,
+      "maxTokens": 393_216,
+      "updatedAt": "2026-06-12"
+    },
+    "deepseek-v4-pro": {
+      "provider": "deepseek",
+      "currency": "CNY",
+      "pricing": {
+        "input": 3.0,
+        "output": 6.0,
+        "cacheRead": 0.025,
+        "cacheWrite": 0.025
+      },
+      "contextWindow": 1_000_000,
+      "maxTokens": 393_216,
+      "updatedAt": "2026-06-12"
+    }
+  },
+  "sources": []
+}

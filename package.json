@@ -1,0 +1,20 @@
+{
+  "name": "@pi/model-router",
+  "version": "0.1.0",
+  "description": "Auto-switch between LLM models based on task complexity to reduce cost",
+  "license": "MIT",
+  "type": "module",
+  "main": "./src/adapters/pi/index.ts",
+  "pi": {
+    "extensions": ["./src/adapters/pi/index.ts"]
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "latest",
+    "typebox": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0",
+    "vitest": "^3.0.0"
+  }
+}

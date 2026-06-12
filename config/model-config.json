@@ -1,0 +1,49 @@
+{
+  "routing": {
+    "rules": [
+      {
+        "id": "complex-task",
+        "priority": 100,
+        "when": {
+          "keywords": ["重构", "架构", "设计", "架构分析", "refactor", "architecture"],
+          "notKeywords": ["小重构", "简单调整"]
+        },
+        "then": { "model": "deepseek-v4-pro", "thinking": "high" }
+      },
+      {
+        "id": "code-generation",
+        "priority": 80,
+        "when": {
+          "keywords": ["实现", "implement", "写一个", "create", "add feature", "修改", "改"]
+        },
+        "then": { "model": "deepseek-v4-pro", "thinking": "medium" }
+      },
+      {
+        "id": "file-reading",
+        "priority": 60,
+        "when": {
+          "toolsUsed": ["read", "ls", "grep", "find"]
+        },
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+      },
+      {
+        "id": "simple-qa",
+        "priority": 50,
+        "when": {
+          "keywords": ["解释", "explain", "什么是", "what is", "总结", "summarize"]
+        },
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+      },
+      {
+        "id": "default",
+        "priority": 0,
+        "when": {},
+        "then": { "model": "deepseek-v4-flash", "thinking": "off" }
+      }
+    ],
+    "escalation": {
+      "enabled": true,
+      "consecutiveErrorsBeforeUpgrade": 2
+    }
+  }
+}
