@@ -43,6 +43,13 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
       const body = JSON.parse(Buffer.concat(chunks).toString('utf-8'));
       const model = targetModel;
 
+      // DeepSeek doesn't support 'developer' role — convert to 'system'
+      if (body.messages) {
+        for (const msg of body.messages) {
+          if (msg.role === 'developer') msg.role = 'system';
+        }
+      }
+
       // Flash: strip thinking params
       if (model === 'deepseek-v4-flash') {
         delete body.reasoning_effort;
