@@ -6,12 +6,27 @@ import { arbitrate } from '../../core/arbitrator';
 import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
 import type { RouterConfig, ClassifierState } from '../../core/types';
-import { registerCommands, setSessionId } from './commands';
+import { registerCommands, setSessionId, setRetryInit } from './commands';
+import { getEngine, ensureEngineLoaded } from '../../semantic/engine';
+import { SemanticCache } from '../../semantic/cache';
+import { matchSemantic } from '../../semantic/matcher';
+import {
+  getSessionState,
+  setSessionDisabled,
+  isSessionDisabled,
+  setManualOverrideRemaining,
+  clearSession,
+} from '../../semantic/state';
 
 let config: RouterConfig | null = null;
 let classifierState: ClassifierState | null = null;
 let sessionId: string = 'default';
 let currentModel: string = 'deepseek-v4-flash';
+
+// Semantic engine singletons
+const semanticEngine = getEngine();
+let semanticCache: SemanticCache | null = null;
+let engineInitAttempted = false;
 
 function loadConfig(): RouterConfig {
   if (config) return config;
@@ -36,6 +51,8 @@ function loadConfig(): RouterConfig {
         { id: 'default', priority: 0, when: {}, then: { model: 'deepseek-v4-flash' } },
       ],
       escalation: { enabled: true, consecutiveErrorsBeforeUpgrade: 2 },
+      semanticRouting: false,
+      semanticThreshold: 0.55,
     },
   };
   return config;
@@ -46,12 +63,36 @@ function resolveSessionId(ctx: any): string {
   return raw?.split('/').pop()?.replace('.jsonl', '') || `session-${Date.now()}`;
 }
 
+// ─── Semantic engine init (lazy, retryable) ───
+
+async function initSemanticEngine(): Promise<void> {
+  if (semanticEngine.ready) return;
+  engineInitAttempted = true;
+  try {
+    await ensureEngineLoaded();
+    semanticCache = new SemanticCache(semanticEngine);
+    const cfg = loadConfig();
+    await semanticCache.compute(cfg.routing.rules);
+    console.log('[ModelRouter] 🧠 Semantic engine ready');
+  } catch (e) {
+    console.warn('[ModelRouter] ⚠️ Semantic engine init failed:', e);
+  }
+}
+
+async function retryInit(): Promise<void> {
+  engineInitAttempted = false;
+  await initSemanticEngine();
+}
+
 export default function (pi: ExtensionAPI) {
   // Load pricing data
   loadPricing();
 
   // Register commands
   registerCommands(pi);
+
+  // Wire retryInit so /router on can trigger engine re-initialization
+  setRetryInit(retryInit);
 
   // ─── before_agent_start: analyze input and switch model ───
   pi.on('before_agent_start', async (event, ctx) => {
@@ -61,6 +102,7 @@ export default function (pi: ExtensionAPI) {
     // Detect session change — Pi may reuse the module across sessions
     const newSessionId = resolveSessionId(ctx);
     if (newSessionId !== sessionId || !classifierState) {
+      clearSession(sessionId);
       console.log(`[ModelRouter] 🆕 session: ${sessionId} → ${newSessionId}${!classifierState ? ' (cold start)' : ''}`);
       sessionId = newSessionId;
       setSessionId(sessionId);
@@ -84,15 +126,60 @@ export default function (pi: ExtensionAPI) {
       return count;
     })();
 
-    const result = arbitrate({
-      text,
-      recentTools,
-      consecutiveToolCalls,
-      rules: cfg.routing.rules,
-      classifierState,
-    });
+    // Determine semantic eligibility
+    const semanticEnabled = cfg.routing.semanticRouting === true; // opt-in!
+    const threshold = cfg.routing.semanticThreshold ?? 0.55;
+    const sessionState = getSessionState(sessionId);
+    const hasManualOverride = sessionState.manualOverrideRemaining > 0;
 
-    console.log(`[ModelRouter] 📋 Router: rule="${result.ruleId}" model="${result.model}" verdict="${classifierState.lastVerdict}" current="${currentModel}"`);
+    // Fast path
+    const routerResult = (await import('../../core/router')).decide(
+      cfg.routing.rules,
+      { text, recentTools, consecutiveToolCalls },
+    );
+
+    let semanticResult = null;
+
+    // Semantic path: only when fast path falls through to default rule
+    if (
+      routerResult?.ruleId === 'default'
+      && semanticEnabled
+      && !isSessionDisabled(sessionId)
+      && !hasManualOverride
+    ) {
+      // Lazy-init engine
+      if (!engineInitAttempted) {
+        await initSemanticEngine();
+      }
+
+      if (semanticEngine.ready && semanticCache) {
+        try {
+          semanticResult = await matchSemantic(text, threshold, semanticEngine, semanticCache);
+        } catch (e) {
+          console.warn('[ModelRouter] ⚠️ Semantic match failed, disabling for session:', e);
+          setSessionDisabled(sessionId, true);
+        }
+      }
+    }
+
+    const result = arbitrate(
+      {
+        text,
+        recentTools,
+        consecutiveToolCalls,
+        rules: cfg.routing.rules,
+        classifierState: classifierState!,
+        semanticThreshold: threshold,
+      },
+      semanticResult ?? undefined,
+    );
+
+    console.log(
+      `[ModelRouter] 📋 Router: rule="${result.ruleId}" model="${result.model}" verdict="${classifierState.lastVerdict}" current="${currentModel}"`,
+    );
+    if (semanticResult) {
+      console.log(`[ModelRouter] 🧠 Semantic: "${semanticResult.ruleId}" (${semanticResult.similarity.toFixed(2)})`);
+    }
 
     // Switch model using the official pi.setModel() API
     if (result.model !== currentModel) {
@@ -115,7 +202,7 @@ export default function (pi: ExtensionAPI) {
     }
   });
 
-  // ─── turn_end: update classifier state and record costs ───
+  // ─── turn_end: update classifier state, record costs, decrement manual override ───
   pi.on('turn_end', async (event, ctx) => {
     if (!classifierState) return;
 
@@ -146,6 +233,12 @@ export default function (pi: ExtensionAPI) {
       });
     }
 
+    // Decrement manual override counter
+    const ss = getSessionState(sessionId);
+    if (ss.manualOverrideRemaining > 0) {
+      ss.manualOverrideRemaining--;
+    }
+
     const turnTools = event.toolResults?.map((r: any) => r.toolName) || [];
     const { newState, verdict } = analyze(classifierState, {
       turnIndex: event.turnIndex,
@@ -155,5 +248,9 @@ export default function (pi: ExtensionAPI) {
       hadRetry: false,
     }, c.routing.escalation);
     classifierState = newState;
+
+    // Note: If model-config.json is modified during a session (e.g., rule descriptions changed),
+    // the semantic cache won't auto-refresh. Run /router off then /router on to recompute
+    // embeddings (initSemanticEngine → semanticCache.compute). This is acceptable for v1.
   });
 }

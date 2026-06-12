@@ -38,10 +38,10 @@ export function formatCostReport(report: CostReport, modelList: string[]): strin
   return lines.join('\n');
 }
 
-export function formatVerboseReport(report: CostReport): string {
+export function formatVerboseReport(report: CostReport, verbosity: number = 1): string {
   const lines: string[] = [];
   lines.push(SEP);
-  lines.push(' 路由明细:');
+  lines.push(verbosity >= 2 ? ' 路由明细（含语义候选排名）:' : ' 路由明细:');
   lines.push(` ${'时间'.padEnd(22)} ${'模型'.padEnd(18)} ${'规则'.padEnd(16)} 原因`);
   lines.push(SEP);
 
@@ -49,6 +49,14 @@ export function formatVerboseReport(report: CostReport): string {
     const time = r.timestamp.slice(11, 19);
     const turn = r.turn !== undefined ? `#${r.turn}` : '';
     lines.push(` ${time.padEnd(22)} ${`${r.model}${turn}`.padEnd(18)} ${r.ruleId.padEnd(16)} ${r.reason}`);
+
+    // Verbosity level 2: show semantic similarity ranking
+    if (verbosity >= 2 && r.semanticMatch) {
+      const scores = r.semanticMatch.allScores
+        .map((s) => `${s.ruleId} ${s.similarity.toFixed(2)}`)
+        .join(', ');
+      lines.push(`   └ 候选: ${scores}`);
+    }
   }
   lines.push(SEP);
   return lines.join('\n');
