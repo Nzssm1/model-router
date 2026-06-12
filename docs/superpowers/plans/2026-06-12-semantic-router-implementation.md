@@ -738,14 +738,15 @@ describe('arbitrate with semantic path', () => {
     expect(result.reason).toContain('upgrade');
   });
 
-  it('Classifier downgrade actually changes model when semantic rule is weak', () => {
+  it('Classifier downgrade actually changes model from Pro to Flash when semantic rule is weak', () => {
     const state = { ...createInitialState('s1', 'pro', 'complex'), lastVerdict: 'downgrade' as const };
     const result = arbitrate(
       { text: '读这个文件', recentTools: ['read'], consecutiveToolCalls: 3, rules, classifierState: state },
-      { ruleId: 'reading', model: 'deepseek-v4-flash', similarity: 0.62, allScores: [] },
+      // semantic matches reading (priority 60, not strong), model suggests Pro
+      { ruleId: 'reading', model: 'deepseek-v4-pro', similarity: 0.62, allScores: [] },
     );
-    // reading rule (priority 60) is not strong, downgrade should take effect
-    // model already flash, no further downgrade possible
+    // reading rule (priority 60 < 80) is NOT strong → downgrade takes effect
+    expect(result.model).toBe('deepseek-v4-flash'); // actually downgraded!
     expect(result.reason).toContain('downgrade');
   });
 
@@ -784,6 +785,7 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { getEngine, ensureEngineLoaded } from '../../semantic/engine';
 import { SemanticCache } from '../../semantic/cache';
 import { matchSemantic } from '../../semantic/matcher';
+import { setSessionId, setRetryInit } from './commands';  // ← required for /router wiring
 import {
   getSessionState,
   setSessionDisabled,
@@ -916,10 +918,14 @@ export default function (pi: ExtensionAPI) {
     }
 
     // ... existing classifier analysis ...
+
+    // Note: If model-config.json is modified during a session (e.g., rule descriptions changed),
+    // the semantic cache won't auto-refresh. Run `/router off` then `/router on` to recompute
+    // embeddings (initSemanticEngine → semanticCache.compute). This is acceptable for v1.
   });
 
-  // ─── Expose for /router command ───
-  (pi as any).__semanticRetry = retryInit;
+  // Wire retryInit for /router on
+  setRetryInit(retryInit);
 }
 ```
 
@@ -988,6 +994,8 @@ export function registerCommands(pi: ExtensionAPI): void {
       // status
       const ss = getSessionState(currentSessionId);
       const eng = getEngine();
+      // Load config for threshold display
+      const cfg = loadConfig();
       const lines = ['━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', ' 🧠 Model Router - 路由状态'];
       if (ss.manualOverrideRemaining > 0) {
         lines.push(` ⚠ 手动模型覆盖中（剩余 ${ss.manualOverrideRemaining} 轮）`);
@@ -995,6 +1003,7 @@ export function registerCommands(pi: ExtensionAPI): void {
       lines.push(
         ` 语义引擎: ${eng.ready ? '已就绪' : (isSessionDisabled(currentSessionId) ? '已关闭' : '未就绪')}`,
         ` 会话状态: ${isSessionDisabled(currentSessionId) ? '已禁用' : '已启用'}`,
+        ` 相似度阈值: ${cfg.routing.semanticThreshold ?? 0.55}`,
         '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
       );
       _ctx.ui.notify(lines.join('\n'), 'info');
