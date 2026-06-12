@@ -206,7 +206,7 @@ matchSemantic(input, rules, threshold)
 7. 返回 Top-1 + 全量分数列表（用于 -vv 展示）
 ```
 
-# 决策仲裁修改
+## 决策仲裁修改
 
 语义路径仅在快速路径输出默认规则时介入。触发条件精确定义为：
 
@@ -278,6 +278,8 @@ export function arbitrate(
       const needsStrong = isStrongRule(semanticResult.ruleId, input.rules);
       if (needsStrong) {
         reason += ` (downgrade 被语义规则 ${semanticResult.ruleId} 否决)`;
+      } else {
+        reason += ` + Classifier downgrade`;
       }
     }
 
@@ -298,7 +300,6 @@ export function arbitrate(
   // 与语义路径互斥：此处只有非默认规则的 Router 结果
   // ...
 }
-```
 ```
 
 ## 阈值设计
