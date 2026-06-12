@@ -1,15 +1,12 @@
-import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
 import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
-import { registerModelRouterProvider } from './provider';
 import { createInitialState, analyze, onModelSwitch } from '../../core/classifier';
 import { arbitrate } from '../../core/arbitrator';
 import { recordCost, resetTurnCounter } from '../../core/tracker';
 import { loadPricing } from '../../utils/pricing';
 import type { RouterConfig, ClassifierState } from '../../core/types';
 import { registerCommands, setSessionId } from './commands';
-import { startProxy, stopProxy, setTargetModel, setApiKey } from './proxy';
 
 let config: RouterConfig | null = null;
 let classifierState: ClassifierState | null = null;
@@ -17,7 +14,7 @@ let sessionId: string = 'default';
 let currentModel: string = 'deepseek-v4-flash';
 
 function loadConfig(): RouterConfig {
-  if (config) return config!;
+  if (config) return config;
   const configPaths = [
     join(process.cwd(), 'config', 'model-config.json'),
     join(process.env.HOME || '~', '.model-router', 'config.json'),
@@ -25,12 +22,11 @@ function loadConfig(): RouterConfig {
   for (const p of configPaths) {
     if (existsSync(p)) {
       try {
-        config = JSON.parse(readFileSync(p, 'utf-8'));
-        return config!;
+        config = JSON.parse(readFileSync(p, 'utf-8')) as RouterConfig;
+        return config;
       } catch { /* try next */ }
     }
   }
-  // Default config
   config = {
     routing: {
       rules: [
@@ -42,38 +38,37 @@ function loadConfig(): RouterConfig {
       escalation: { enabled: true, consecutiveErrorsBeforeUpgrade: 2 },
     },
   };
-  return config!;
+  return config;
+}
+
+function resolveSessionId(ctx: any): string {
+  const raw = ctx?.sessionManager?.getSessionFile?.();
+  return raw?.split('/').pop()?.replace('.jsonl', '') || `session-${Date.now()}`;
 }
 
 export default function (pi: ExtensionAPI) {
-  // Register model-router virtual provider + start proxy
-  registerModelRouterProvider(pi);
-  startProxy();
-  setApiKey(process.env.DEEPSEEK_API_KEY || '');
-
   // Load pricing data
-  const __filename = fileURLToPath(import.meta.url);
-  const __dirname = dirname(__filename);
-  const pricingPath = join(__dirname, '..', '..', '..', 'pricing', 'pricing.json');
-  loadPricing(pricingPath);
+  loadPricing();
 
   // Register commands
   registerCommands(pi);
 
-  // ─── before_agent_start: analyze input and set target model ───
+  // ─── before_agent_start: analyze input and switch model ───
   pi.on('before_agent_start', async (event, ctx) => {
     const text = event.prompt;
     if (!text) return;
 
-    // Initialize classifier state on first run
-    if (!classifierState) {
-      sessionId = ctx.sessionManager.getSessionFile()?.split('/').pop()?.replace('.jsonl', '') || `session-${Date.now()}`;
+    // Detect session change — Pi may reuse the module across sessions
+    const newSessionId = resolveSessionId(ctx);
+    if (newSessionId !== sessionId || !classifierState) {
+      console.log(`[ModelRouter] 🆕 session: ${sessionId} → ${newSessionId}${!classifierState ? ' (cold start)' : ''}`);
+      sessionId = newSessionId;
       setSessionId(sessionId);
       resetTurnCounter();
+      currentModel = 'deepseek-v4-flash';
       classifierState = createInitialState(sessionId, currentModel, 'default');
     }
 
-    // Build context for router
     const cfg = loadConfig();
     const recentTools = classifierState.recentTools.flatMap(t => t.tools);
     const consecutiveToolCalls = (() => {
@@ -88,6 +83,7 @@ export default function (pi: ExtensionAPI) {
       }
       return count;
     })();
+
     const result = arbitrate({
       text,
       recentTools,
@@ -96,30 +92,40 @@ export default function (pi: ExtensionAPI) {
       classifierState,
     });
 
-    // Set target model for the proxy — this is the actual model switch!
+    console.log(`[ModelRouter] 📋 Router: rule="${result.ruleId}" model="${result.model}" verdict="${classifierState.lastVerdict}" current="${currentModel}"`);
+
+    // Switch model using the official pi.setModel() API
     if (result.model !== currentModel) {
-      const oldModel = currentModel;
-      currentModel = result.model;
-      const upgradedToStronger = result.model === 'deepseek-v4-pro' && oldModel === 'deepseek-v4-flash';
-      classifierState = onModelSwitch(classifierState, result.model, result.ruleId, upgradedToStronger);
+      const targetModel = ctx.modelRegistry.find('deepseek', result.model);
+      if (targetModel) {
+        console.log(`[ModelRouter] 🔄 Switching: ${currentModel} → ${result.model} (rule: ${result.ruleId})`);
+        const ok = await pi.setModel(targetModel);
+        if (ok) {
+          const oldModel = currentModel;
+          currentModel = result.model;
+          const upgradedToStronger = result.model === 'deepseek-v4-pro' && oldModel === 'deepseek-v4-flash';
+          classifierState = onModelSwitch(classifierState, result.model, result.ruleId, upgradedToStronger);
+          console.log(`[ModelRouter] ✅ Model switched to ${result.model}`);
+        } else {
+          console.warn(`[ModelRouter] ⚠️ setModel(${result.model}) returned false — no API key?`);
+        }
+      } else {
+        console.warn(`[ModelRouter] ⚠️ Model "${result.model}" not found in registry`);
+      }
     }
-    setTargetModel(currentModel, result.thinking);
   });
 
   // ─── turn_end: update classifier state and record costs ───
   pi.on('turn_end', async (event, ctx) => {
     if (!classifierState) return;
 
-    // @ts-expect-error Pi SDK types: message can be assistant message with usage
     const message = event.message as any;
     const usage = message?.usage;
     const hadError = message?.stopReason === 'error';
 
     const c = loadConfig();
 
-    // Record cost for this turn
     if (usage) {
-      // Use the actual model from API response (proxy returns flash or pro)
       const actualModel = message?.model || currentModel;
       const escalated = classifierState.lastVerdict === 'upgrade';
       recordCost({
@@ -140,8 +146,7 @@ export default function (pi: ExtensionAPI) {
       });
     }
 
-    // Analyze turn result for next round
-    const turnTools = event.toolResults?.map(r => r.toolName) || [];
+    const turnTools = event.toolResults?.map((r: any) => r.toolName) || [];
     const { newState, verdict } = analyze(classifierState, {
       turnIndex: event.turnIndex,
       toolsCalled: turnTools,
@@ -150,10 +155,5 @@ export default function (pi: ExtensionAPI) {
       hadRetry: false,
     }, c.routing.escalation);
     classifierState = newState;
-  });
-
-  // ─── session_shutdown: clean up proxy ───
-  pi.on('session_shutdown', async () => {
-    stopProxy();
   });
 }

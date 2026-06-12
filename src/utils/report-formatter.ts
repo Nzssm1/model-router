@@ -16,7 +16,7 @@ export function formatCostReport(report: CostReport, modelList: string[]): strin
   for (const model of modelList) {
     const m = report.byModel[model];
     if (!m) continue;
-    const cacheRatio = m.totalInputTokens > 0 ? (m.cacheHitTokens / m.totalInputTokens * 100).toFixed(0) : '0';
+    const cacheRatio = m.totalInputTokens > 0 ? Math.min(100, Math.round(m.cacheHitTokens / m.totalInputTokens * 100)).toString() : '0';
     const pct = report.totalCost > 0 ? (m.cost / report.totalCost * 100).toFixed(0) : '0';
     lines.push(` ${model.padEnd(20)} ${String(m.calls).padStart(5)} ${`${cacheRatio}%`.padStart(10)} ¥${m.cost.toFixed(4).padStart(7)} ${`${pct}%`.padStart(5)}`);
   }
